@@ -4,7 +4,7 @@ A custom Lovelace card that turns your Home Assistant dashboard into a retro spl
 
 Inspired by [FlipOff](https://github.com/magnum6actual/flipoff), a free split-flap display emulator.
 
-
+![Split-Flap Card Demo](splitflap.gif)
 
 ## Features
 
