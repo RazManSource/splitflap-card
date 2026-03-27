@@ -1,6 +1,6 @@
 {
   "name": "Split-Flap Display Card",
-  "content_in_root": false,
+  "content_in_root": true,
   "filename": "splitflap-card.js",
   "render_readme": true
 }
