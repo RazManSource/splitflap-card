@@ -24,10 +24,13 @@
  *   rows: 6                     # default 6
  *   columns: 22                 # default 22
  *   font_size: auto             # "auto" scales to card, or px value e.g. "24px"
+ *   animation: true             # set false for e-ink displays (instant update, no scramble)
  *   scramble_duration: 600      # ms per tile scramble animation
  *   stagger_delay: 25           # ms stagger between tiles
  *   sound: false                # enable click sound (default off)
  *   sound_type: "mechanical"    # "mechanical" (click+flutter+thud) or "soft" (gentle clack)
+ *   sound_delay: 0              # ms offset to adjust sound timing vs animation (can be negative)
+ *   sound_every: 3              # play a sound every N tiles (1 = every tile, 3 = every 3rd)
  *   accent_color: "#e8572a"     # top/bottom bar colour
  *   scramble_colors:            # colours shown during scramble
  *     - "#e8572a"
@@ -50,7 +53,7 @@
  *       value: "LINE ONE|LINE TWO|LINE THREE"
  */
 
-const VALID_CHARS = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&()-+=[]:;\'",.<>?/°';
+const VALID_CHARS = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&()-+=[]:;\x27",.<>?/°';
 const DEFAULT_SCRAMBLE_COLORS = ['#e8572a', '#f5a623', '#4a90d9', '#7ed321', '#bd10e0'];
 const DEFAULT_ACCENT = '#e8572a';
 
@@ -61,10 +64,10 @@ class SplitflapCard extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._currentGrid = null;
-    this._animating = false;
     this._tiles = [];
     this._rendered = false;
     this._lastValue = null;
+    this._audioCtx = null;
   }
 
   /* ── HA plumbing ─────────────────────────────────── */
@@ -78,10 +81,13 @@ class SplitflapCard extends HTMLElement {
       entity: '',
       rows: 6,
       columns: 22,
+      animation: true,
       scramble_duration: 600,
       stagger_delay: 25,
       sound: false,
       sound_type: 'mechanical',
+      sound_delay: 0,
+      sound_every: 3,
       word_wrap: true,
       line_separator: '|',
       accent_color: DEFAULT_ACCENT,
@@ -95,10 +101,13 @@ class SplitflapCard extends HTMLElement {
     this._config = {
       rows: 6,
       columns: 22,
+      animation: true,
       scramble_duration: 600,
       stagger_delay: 25,
       sound: false,
       sound_type: 'mechanical',
+      sound_delay: 0,
+      sound_every: 3,
       word_wrap: true,
       line_separator: '|',
       accent_color: DEFAULT_ACCENT,
@@ -183,8 +192,6 @@ class SplitflapCard extends HTMLElement {
           padding: 6px 10px;
           aspect-ratio: calc(var(--cols) * 1.0) / calc(var(--rows) * 1.45);
         }
-
-        /* ── Tile ────────────────────────── */
         .tile {
           position: relative;
           background: #2c2c2c;
@@ -213,14 +220,8 @@ class SplitflapCard extends HTMLElement {
           user-select: none;
           z-index: 1;
           text-align: center;
-        }
-
-        /* auto-size font to container */
-        .tile-char {
           font-size: ${c.font_size === 'auto' ? 'min(3.2cqi, 2.8vh)' : c.font_size};
         }
-
-        /* scramble keyframes */
         @keyframes scrambleIn {
           0%   { transform: rotateX(90deg); opacity: 0; }
           40%  { transform: rotateX(-10deg); opacity: 1; }
@@ -230,11 +231,6 @@ class SplitflapCard extends HTMLElement {
         .tile.flipping .tile-char {
           animation: scrambleIn 0.25s ease-out forwards;
         }
-        .tile.flash {
-          transition: background-color 0.06s;
-        }
-
-        /* bottom bar */
         .vb-bar-bottom {
           height: 4px;
           background: linear-gradient(90deg,
@@ -242,15 +238,6 @@ class SplitflapCard extends HTMLElement {
             #f5a623 60%, var(--accent) 100%);
           border-radius: 2px;
           margin: 4px 10px 10px;
-        }
-
-        /* entity missing state */
-        .vb-error {
-          color: #ff6b6b;
-          font-family: monospace;
-          font-size: 13px;
-          padding: 20px;
-          text-align: center;
         }
       </style>
 
@@ -264,7 +251,6 @@ class SplitflapCard extends HTMLElement {
       </ha-card>
     `;
 
-    // Build tile grid
     const board = this.shadowRoot.getElementById('board');
     this._tiles = [];
     this._currentGrid = [];
@@ -284,8 +270,6 @@ class SplitflapCard extends HTMLElement {
     }
 
     this._rendered = true;
-
-    // If we already have a value queued, display it
     if (this._lastValue !== null) {
       this._setMessage(this._lastValue);
     }
@@ -299,10 +283,7 @@ class SplitflapCard extends HTMLElement {
     const sep = this._config.line_separator;
     const wrap = this._config.word_wrap;
 
-    // Split into lines by separator
     let lines = text.split(sep);
-
-    // Word-wrap each line
     const wrappedLines = [];
     for (const line of lines) {
       if (!wrap) {
@@ -312,7 +293,6 @@ class SplitflapCard extends HTMLElement {
         let current = '';
         for (const word of words) {
           if (word.length > cols) {
-            // Word longer than a row — just force it
             if (current) { wrappedLines.push(current); current = ''; }
             for (let i = 0; i < word.length; i += cols) {
               wrappedLines.push(word.substring(i, i + cols));
@@ -331,18 +311,15 @@ class SplitflapCard extends HTMLElement {
       }
     }
 
-    // Centre vertically
     const usedRows = Math.min(wrappedLines.length, rows);
     const startRow = Math.floor((rows - usedRows) / 2);
 
-    // Build grid
     const grid = [];
     for (let r = 0; r < rows; r++) {
       grid[r] = [];
       const lineIdx = r - startRow;
       const lineText = (lineIdx >= 0 && lineIdx < wrappedLines.length)
         ? wrappedLines[lineIdx] : '';
-      // Centre horizontally
       const pad = Math.floor((cols - lineText.length) / 2);
       for (let c2 = 0; c2 < cols; c2++) {
         const charIdx = c2 - pad;
@@ -367,8 +344,8 @@ class SplitflapCard extends HTMLElement {
     const colors = this._config.scramble_colors || DEFAULT_SCRAMBLE_COLORS;
     const rows = this._config.rows;
     const cols = this._config.columns;
+    const animate = this._config.animation !== false;
 
-    // Collect tiles that need to change
     const changes = [];
     for (let r = 0; r < rows; r++) {
       for (let c2 = 0; c2 < cols; c2++) {
@@ -380,24 +357,34 @@ class SplitflapCard extends HTMLElement {
 
     if (changes.length === 0) return;
 
-    // Pre-schedule sounds using Web Audio API clock for precise timing
-    if (this._config.sound && changes.length > 0) {
-      this._scheduleFlipSounds(changes.length, stagger, duration);
+    if (animate) {
+      // Pre-schedule sounds
+      if (this._config.sound && changes.length > 0) {
+        this._scheduleFlipSounds(changes.length, stagger, duration);
+      }
+
+      // Animate each changed tile with stagger
+      changes.forEach((ch, idx) => {
+        const tileIdx = ch.r * cols + ch.c2;
+        const tile = this._tiles[tileIdx];
+        const delay = idx * stagger;
+        const scrambleSteps = Math.floor(duration / 60);
+
+        setTimeout(() => {
+          this._scrambleTile(tile, ch.target, scrambleSteps, colors);
+        }, delay);
+      });
+    } else {
+      // E-ink / no-animation mode — instant update
+      changes.forEach((ch) => {
+        const tileIdx = ch.r * cols + ch.c2;
+        const tile = this._tiles[tileIdx];
+        tile.charEl.textContent = ch.target;
+        tile.el.style.backgroundColor = '';
+      });
     }
 
-    // Animate each changed tile with stagger
-    changes.forEach((ch, idx) => {
-      const tileIdx = ch.r * cols + ch.c2;
-      const tile = this._tiles[tileIdx];
-      const delay = idx * stagger;
-      const scrambleSteps = Math.floor(duration / 60);
-
-      setTimeout(() => {
-        this._scrambleTile(tile, ch.target, scrambleSteps, colors);
-      }, delay);
-    });
-
-    // Update current grid immediately (for next comparison)
+    // Update current grid
     for (let r = 0; r < rows; r++) {
       for (let c2 = 0; c2 < cols; c2++) {
         this._currentGrid[r][c2] = newGrid[r][c2];
@@ -416,7 +403,6 @@ class SplitflapCard extends HTMLElement {
         setTimeout(() => tile.el.classList.remove('flipping'), 260);
         return;
       }
-      // Random char + random colour flash
       const randChar = VALID_CHARS[Math.floor(Math.random() * VALID_CHARS.length)];
       const randColor = colors[Math.floor(Math.random() * colors.length)];
       tile.charEl.textContent = randChar;
@@ -446,35 +432,21 @@ class SplitflapCard extends HTMLElement {
     return buf;
   }
 
-  /**
-   * Pre-schedule all tile landing sounds up front using the Web Audio clock.
-   * Each tile lands at: (index * stagger_delay) + scramble_duration ms from now.
-   * We thin out sounds so only every Nth tile clicks — avoids audio mush
-   * while still giving the cascading rattle effect.
-   */
   _scheduleFlipSounds(tileCount, staggerMs, durationMs) {
     try {
       const ctx = this._getAudioCtx();
       const now = ctx.currentTime;
       const staggerSec = staggerMs / 1000;
-      const durationSec = durationMs / 1000;
+      const delaySec = (this._config.sound_delay || 0) / 1000;
+      const every = Math.max(1, Math.round(this._config.sound_every || 3));
 
-      // Thin out: play a sound every Nth tile, but at least 8-12 sounds total
-      // so it still sounds like a cascading rattle
-      const targetSounds = Math.min(tileCount, Math.max(8, Math.ceil(tileCount / 3)));
-      const every = Math.max(1, Math.floor(tileCount / targetSounds));
-
-      // Pre-generate a shared noise buffer (reused across scheduled sounds)
       const sharedNoise = this._noiseBuffer(0.08);
-
       const type = this._config.sound_type || 'mechanical';
 
       for (let i = 0; i < tileCount; i += every) {
-        // Sound fires when each tile starts its scramble animation
-        const flipTime = now + (i * staggerSec);
-        // Add tiny random jitter for realism (±5ms)
+        const flipTime = now + (i * staggerSec) + delaySec;
         const jitter = (Math.random() - 0.5) * 0.01;
-        const t = flipTime + jitter;
+        const t = Math.max(now, flipTime + jitter);
 
         if (type === 'mechanical') {
           this._scheduleMechanical(ctx, sharedNoise, t);
@@ -486,7 +458,6 @@ class SplitflapCard extends HTMLElement {
   }
 
   _scheduleMechanical(ctx, noiseBuf, t) {
-    // 1) Initial click — sharp filtered noise burst
     const clickSrc = ctx.createBufferSource();
     clickSrc.buffer = noiseBuf;
     const clickGain = ctx.createGain();
@@ -499,7 +470,6 @@ class SplitflapCard extends HTMLElement {
     clickSrc.connect(clickFilter).connect(clickGain).connect(ctx.destination);
     clickSrc.start(t); clickSrc.stop(t + 0.015);
 
-    // 2) Flutter — flap spinning
     const flutterSrc = ctx.createBufferSource();
     flutterSrc.buffer = noiseBuf;
     const flutterGain = ctx.createGain();
@@ -513,7 +483,6 @@ class SplitflapCard extends HTMLElement {
     flutterSrc.connect(flutterFilter).connect(flutterGain).connect(ctx.destination);
     flutterSrc.start(t + 0.008); flutterSrc.stop(t + 0.06);
 
-    // 3) Landing thud
     const thudOsc = ctx.createOscillator();
     thudOsc.type = 'sine';
     thudOsc.frequency.setValueAtTime(130 + Math.random() * 40, t + 0.045);
@@ -524,7 +493,6 @@ class SplitflapCard extends HTMLElement {
     thudOsc.connect(thudGain).connect(ctx.destination);
     thudOsc.start(t + 0.045); thudOsc.stop(t + 0.1);
 
-    // 4) Landing click
     const landSrc = ctx.createBufferSource();
     landSrc.buffer = noiseBuf;
     const landGain = ctx.createGain();
@@ -538,7 +506,6 @@ class SplitflapCard extends HTMLElement {
   }
 
   _scheduleSoft(ctx, noiseBuf, t) {
-    // Soft clack
     const src = ctx.createBufferSource();
     src.buffer = noiseBuf;
     const gain = ctx.createGain();
@@ -551,7 +518,6 @@ class SplitflapCard extends HTMLElement {
     src.connect(filter).connect(gain).connect(ctx.destination);
     src.start(t); src.stop(t + 0.04);
 
-    // Soft thud
     const osc = ctx.createOscillator();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(90 + Math.random() * 30, t + 0.02);
@@ -584,6 +550,13 @@ class SplitflapCardEditor extends HTMLElement {
       <style>
         :host { display: block; padding: 16px; }
         .row { margin-bottom: 12px; }
+        .section {
+          font-size: 11px; font-weight: 600; text-transform: uppercase;
+          letter-spacing: 0.08em; color: var(--secondary-text-color);
+          margin: 16px 0 8px; padding-top: 8px;
+          border-top: 1px solid var(--divider-color, #333);
+        }
+        .section:first-child { border-top: none; margin-top: 0; padding-top: 0; }
         label { display: block; font-weight: 500; margin-bottom: 4px; font-size: 13px; color: var(--primary-text-color); }
         input, select {
           width: 100%; padding: 8px; border-radius: 6px;
@@ -594,6 +567,8 @@ class SplitflapCardEditor extends HTMLElement {
         .cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .hint { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; }
       </style>
+
+      <div class="section">General</div>
       <div class="row">
         <label>Entity (input_text)</label>
         <input id="entity" value="${c.entity || ''}" placeholder="input_text.splitflap_message" />
@@ -612,16 +587,6 @@ class SplitflapCardEditor extends HTMLElement {
           <input id="columns" type="number" value="${c.columns || 22}" min="4" max="44" />
         </div>
       </div>
-      <div class="cols-2">
-        <div class="row">
-          <label>Scramble duration (ms)</label>
-          <input id="scramble_duration" type="number" value="${c.scramble_duration || 600}" min="100" max="3000" />
-        </div>
-        <div class="row">
-          <label>Stagger delay (ms)</label>
-          <input id="stagger_delay" type="number" value="${c.stagger_delay || 25}" min="0" max="200" />
-        </div>
-      </div>
       <div class="row">
         <label>Line separator character</label>
         <input id="line_separator" value="${c.line_separator || '|'}" maxlength="1" />
@@ -631,6 +596,29 @@ class SplitflapCardEditor extends HTMLElement {
         <label>Accent colour</label>
         <input id="accent_color" type="color" value="${c.accent_color || DEFAULT_ACCENT}" />
       </div>
+
+      <div class="section">Animation</div>
+      <div class="row">
+        <label>Animation</label>
+        <select id="animation">
+          <option value="true" ${c.animation !== false ? 'selected' : ''}>On (scramble + flip)</option>
+          <option value="false" ${c.animation === false ? 'selected' : ''}>Off (instant update — e-ink)</option>
+        </select>
+      </div>
+      <div class="cols-2">
+        <div class="row">
+          <label>Scramble duration (ms)</label>
+          <input id="scramble_duration" type="number" value="${c.scramble_duration || 600}" min="100" max="3000" step="50" />
+          <div class="hint">How long each tile scrambles</div>
+        </div>
+        <div class="row">
+          <label>Stagger delay (ms)</label>
+          <input id="stagger_delay" type="number" value="${c.stagger_delay || 25}" min="0" max="200" step="5" />
+          <div class="hint">Delay between each tile starting</div>
+        </div>
+      </div>
+
+      <div class="section">Sound</div>
       <div class="cols-2">
         <div class="row">
           <label>Sound</label>
@@ -648,19 +636,31 @@ class SplitflapCardEditor extends HTMLElement {
           </select>
         </div>
       </div>
+      <div class="cols-2">
+        <div class="row">
+          <label>Sound delay (ms)</label>
+          <input id="sound_delay" type="number" value="${c.sound_delay || 0}" min="-500" max="1000" step="25" />
+          <div class="hint">Shift sound vs animation. Positive = later, negative = earlier</div>
+        </div>
+        <div class="row">
+          <label>Sound every N tiles</label>
+          <input id="sound_every" type="number" value="${c.sound_every || 3}" min="1" max="20" step="1" />
+          <div class="hint">1 = every tile clicks, 3 = every 3rd</div>
+        </div>
+      </div>
     `;
 
-    // Wire up change events
-    ['entity', 'title', 'rows', 'columns', 'scramble_duration', 'stagger_delay',
-     'line_separator', 'accent_color', 'sound', 'sound_type'].forEach(key => {
+    ['entity', 'title', 'rows', 'columns', 'line_separator', 'accent_color',
+     'animation', 'scramble_duration', 'stagger_delay',
+     'sound', 'sound_type', 'sound_delay', 'sound_every'].forEach(key => {
       const el = this.shadowRoot.getElementById(key);
       if (!el) return;
       el.addEventListener('change', () => {
         let val;
-        if (key === 'sound') {
+        if (key === 'sound' || key === 'animation') {
           val = el.value === 'true';
         } else if (el.type === 'number') {
-          val = parseInt(el.value, 10);
+          val = parseFloat(el.value);
         } else {
           val = el.value;
         }
@@ -684,5 +684,5 @@ window.customCards.push({
   name: 'Split-Flap Display',
   description: 'Split-flap display card with flip animations',
   preview: true,
-  documentationURL: 'https://github.com/magnum6actual/flipoff',
+  documentationURL: 'https://github.com/RazManSource/splitflap-card',
 });
