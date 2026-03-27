@@ -19,19 +19,28 @@ Inspired by [FlipOff](https://github.com/magnum6actual/flipoff), a free split-fl
 
 ## Installation
 
+### HACS (Recommended)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=RazManSource&repository=splitflap-card&category=plugin)
+
+Or manually:
+
+1. Open HACS in Home Assistant
+2. Click the three dots in the top right → **Custom repositories**
+3. Add `https://github.com/RazManSource/splitflap-card` with category **Dashboard**
+4. Search for "Split-Flap" and click **Install**
+5. Restart Home Assistant
+
 ### Manual
 
-1. Download `splitflap-card.js` from this repository
+1. Download `splitflap-card.js` from the [latest release](https://github.com/RazManSource/splitflap-card/releases/latest)
 2. Copy it to your Home Assistant `/config/www/` folder
 3. Add it as a resource:
    - Go to **Settings → Dashboards → ⋮ (top right) → Resources**
    - Click **Add Resource**
    - URL: `/local/splitflap-card.js`
    - Type: **JavaScript Module**
-4. Create an `input_text` helper:
-   - Go to **Settings → Devices & Services → Helpers → Create Helper → Text**
-   - Name it whatever you like (e.g. "Splitflap Message")
-   - Set max length to **132** (6 rows × 22 columns)
+4. Hard refresh your browser (Ctrl+F5)
 
 ## Configuration
 
